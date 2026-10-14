@@ -1,32 +1,41 @@
 <!DOCTYPE html>
 <html lang="es-AR" class="scroll-smooth">
 <!--
-  ══════════════════════════════════════════════════════════════════════════
-  📄 CV EXPRESS — PWA Mobile-First · Wizard de carga de datos para armar CVs
-  ══════════════════════════════════════════════════════════════════════════
+  ============================================================================
+  📄 CV EXPRESS — App mobile-first para armar currículums
+  ============================================================================
 
   STACK: HTML + Tailwind CSS (CDN) + JavaScript Vanilla · 100% frontend.
 
-  ⚙️ CONFIGURACIÓN (2 minutos):
-    1) Buscá la constante `CONFIG` (al inicio del <script>) y reemplazá:
-         · ADMIN_EMAIL      → tu casilla de correo (receptora de las solicitudes).
-         · ADMIN_WHATSAPP   → tu número en formato internacional sin "+"
-                              (ej. Argentina: 5491123456789).
-    2) La PRIMERA vez que llegue un envío, FormSubmit manda un mail de
-       activación a esa casilla: confirmalo una sola vez y queda habilitado.
+  ⚙️ CONFIGURACIÓN — editá la constante CONFIG dentro del <script>:
+      · ADMIN_WHATSAPP   tu número en formato internacional, SOLO dígitos.
+                          Ejemplo Tucumán: 5493816096311
+      · CLOUDINARY_CLOUD  tu "cloud name" de Cloudinary (plan gratuito).
+                          Si queda VACÍO el PDF no se sube a ningún lado:
+                          el cliente lo descarga y lo comparte a mano, y vos
+                          igual recibís todos los datos en texto.
+
+  🔎 POR QUÉ HAY UN HOSTING DE POR MEDIO:
+     Los enlaces de WhatsApp (wa.me) NO pueden mandar archivos: sólo abren
+     el chat con un texto. Para que te llegue el PDF hay que alojarlo en
+     algún lado y mandar el enlace. Cloudinary tiene plan gratis y permite
+     subir desde el navegador sin exponer claves secretas.
 
   📌 CÓMO FUNCIONA:
-    · Wizard de 4 pasos con barra de progreso y navegación inferior fija.
-    · Foto de perfil: se redimensiona en un <canvas> oculto (máx 600×600)
-      y viaja como Base64 JPEG dentro del mail.
-    · Al enviar: POST a FormSubmit (AJAX) con resumen estructurado + JSON
-      + un "PROMPT PARA CREAR EL CV" listo para copiar y pegar en una IA.
-    · Pantalla de éxito con botón directo a WhatsApp.
-    · Tema claro/oscuro con persistencia en localStorage.
+     · Wizard de 4 pasos con barra de progreso y navegación inferior fija.
+     · Foto de perfil: se redimensiona en un <canvas> oculto (máx 600×600)
+       y va incrustada en la portada del PDF.
+     · Al tocar "Enviar mis datos": se arma el PDF en el navegador (jsPDF,
+       sin servidor), se sube a Cloudinary y se abre WhatsApp con el
+       resumen completo + el enlace. El cliente aprieta "Enviar" y te llega.
+     · El PDF tiene 2 páginas: 1) los datos legibles · 2) el JSON y el
+       prompt listo para generar el CV con una IA.
+     · SIN CORREO: no se usa FormSubmit ni ningún servidor de email.
+     · Tema claro/oscuro con persistencia en localStorage.
 
   🚀 PARA PWA COMPLETA (opcional): agregá un manifest.json + service worker
      y serví el archivo por HTTPS. Los meta tags de "app-capable" ya están.
-  ══════════════════════════════════════════════════════════════════════════
+  ============================================================================
 -->
 <head>
   <meta charset="UTF-8" />
@@ -659,6 +668,9 @@
     let enviando = false;
     let editIdx = -1; // índice de experiencia en edición (-1 = nueva)
 
+    /** Código corto de esta carga. Va en el PDF y sirve para ordenarlas. */
+    let referencia = 'CV-' + Date.now().toString(36).toUpperCase().slice(-6);
+
     /* ══════════════════════════════════════════════════════════════════
        3) TEMA CLARO / OSCURO (persistencia en localStorage)
        ══════════════════════════════════════════════════════════════════ */
@@ -995,13 +1007,8 @@
         })),
         educacion: { nivel: s.nivelEstudios, titulo_carrera: s.titulo.trim() || null, cursos: s.cursos.trim() || null },
         habilidades: { herramientas: s.habilidades, otras: s.otrasHerramientas.trim() || null },
-        foto_perfil: 'Incluida en el mail (campo foto_perfil_base64, formato data:image/jpeg;base64,…)',
+        foto_perfil: s.foto ? 'Incluida en la portada del PDF' : null,
       };
-    }
-
-    /** Bloque listo para copiar y pegar en ChatGPT/Claude/etc. */
-    function armarPromptIA(json) {
-      return 'PROMPT PARA CREAR EL CV: Actúa como experto en RRHH y redacta un CV profesional de alto impacto con estos datos: ' + json;
     }
 
     /** Resumen legible (con emojis) que viaja DENTRO del mensaje de WhatsApp. */
@@ -1061,129 +1068,369 @@
       `https://wa.me/${CONFIG.ADMIN_WHATSAPP}?text=${encodeURIComponent(armarTextoWhatsApp(urlPDF))}`;
 
     /* ══════════════════════════════════════════════════════════════════
-       11) ENVÍO: FormSubmit AJAX (mail estructurado + JSON + prompt IA)
+    /* ══════════════════════════════════════════════════════════════════
+       11) PDF: se arma en el navegador con jsPDF + se sube a Cloudinary
        ══════════════════════════════════════════════════════════════════ */
-    function armarPayload(fotoBase64) {
-      const json = JSON.stringify(armarJSON(), null, 2);
-      return {
-        // Opciones de FormSubmit (claves con "_")
-        _subject: `🆕 Nueva solicitud de CV — ${state.nombre.trim() || 'Cliente'}`,
-        _template: 'box',           // mail con formato limpio de bloques
-        _captcha: 'false',
-        _replyto: state.correo.trim(), // al responder, le contestás directo al cliente
-        // Datos principales (filas del mail)
-        nombre: state.nombre.trim(),
-        telefono_whatsapp: state.telefono.trim(),
-        correo: state.correo.trim(),
-        localidad: state.localidad.trim(),
-        // Resumen legible de TODO
-        resumen_completo: armarResumenEmail(),
-        // Datos estructurados
-        datos_json: json,
-        // 🤖 Bloque de prompt listo para copiar y generar el CV con una IA
-        prompt_ia: armarPromptIA(json),
-        // 🖼️ Foto optimizada en Base64 (data URI JPEG)
-        foto_nombre: state.foto ? state.foto.nombre : 'sin foto',
-        foto_perfil_base64: fotoBase64 || 'Sin foto',
-      };
+
+    /**
+     * Las fuentes estándar de jsPDF usan WinAnsi (Latin-1). Si el texto
+     * tiene emojis o caracteres fuera de ese rango, se dibujan como
+     * cuadraditos negros. Esto los limpia antes de escribir en el PDF.
+     */
+    function pdfSeguro(txt) {
+      return String(txt ?? '')
+        .replace(/[\u2018\u2019\u201B]/g, "'")
+        .replace(/[\u201C\u201D]/g, '"')
+        .replace(/[\u2013\u2014]/g, '-')
+        .replace(/\u2026/g, '...')
+        .replace(/[^\x09\x0A\x20-\x7E\xA1-\xFF]/g, '')   // fuera de Latin-1 -> fuera
+        .replace(/[ \t]+/g, ' ')
+        .trim();
     }
 
-    async function enviarEmail(fotoBase64) {
-      if (!CONFIG.ADMIN_EMAIL || CONFIG.ADMIN_EMAIL.includes('TU_CORREO')) {
-        throw { tipo: 'config', mensaje: 'Falta configurar el email del administrador en CONFIG.ADMIN_EMAIL (dentro del código).' };
-      }
-      const ctrl = new AbortController();
-      const timer = setTimeout(() => ctrl.abort(), 20000); // timeout 20 s
+    /** Devuelve la foto reducida para incrustar en el PDF, o null. */
+    async function fotoParaPDF() {
+      if (!state.fotoOriginal) return null;
       try {
-        const res = await fetch(`https://formsubmit.co/ajax/${CONFIG.ADMIN_EMAIL}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
-          body: JSON.stringify(armarPayload(fotoBase64)),
-          signal: ctrl.signal,
-        });
-        let data = {};
-        try { data = await res.json(); } catch (e) { /* respuesta no-JSON */ }
-        if (!res.ok) throw { tipo: 'http', mensaje: `El servidor de email respondió ${res.status}.` };
-        const msg = String(data.message || '').toLowerCase();
-        if (msg.includes('verif')) {
-          throw { tipo: 'activacion', mensaje: 'FormSubmit necesita activación: revisá la casilla del administrador y confirmá el mail que llegó (solo la primera vez).' };
-        }
-        if (data.success === 'false' || data.success === false) {
-          throw { tipo: 'api', mensaje: String(data.message || 'El servicio de email rechazó el envío.') };
-        }
-        return true;
-      } finally {
-        clearTimeout(timer);
+        const dataURL = await generarFoto(420, 0.85);
+        const img = await cargarImagen(dataURL);
+        return { dataURL, w: img.width, h: img.height };
+      } catch (e) {
+        console.warn('No se pudo preparar la foto para el PDF', e);
+        return null;
       }
     }
 
-    /** Flujo completo de envío: intenta con la foto full y reintenta liviano. */
+    /**
+     * Arma el PDF: página 1 con los datos legibles (incluye la foto),
+     * página 2 con el JSON + el prompt listo para generar el CV con una IA.
+     * @returns {Promise<{blob: Blob, nombreArchivo: string}>}
+     */
+    async function generarPDF() {
+      const { jsPDF } = window.jspdf;
+      const doc = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'portrait' });
+
+      const ANCHO = 210, MARGEN = 15, DERECHA = ANCHO - MARGEN, PIE = 290;
+      const MARCA = [79, 70, 229], TINTA = [15, 23, 42], GRIS = [100, 116, 139], LINEA = [226, 232, 240];
+      const s = state;
+      let y = 20;
+
+      const nuevaPagina = () => { doc.addPage(); y = 20; };
+      const asegurarEspacio = (alto) => { if (y + alto > 277) nuevaPagina(); };
+
+      const seccion = (titulo) => {
+        asegurarEspacio(18);
+        doc.setDrawColor(...LINEA); doc.setLineWidth(0.3);
+        doc.line(MARGEN, y - 4, DERECHA, y - 4);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(11); doc.setTextColor(...MARCA);
+        doc.text(pdfSeguro(titulo).toUpperCase(), MARGEN, y + 3);
+        y += 12;
+      };
+
+      const chips = (lista) => {
+        if (!lista || !lista.length) return;
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(9);
+        let cx = MARGEN;
+        lista.forEach((item) => {
+          const txt = pdfSeguro(item);
+          if (!txt) return;
+          const w = doc.getTextWidth(txt) + 8;
+          if (cx + w > DERECHA) { cx = MARGEN; y += 8; }
+          asegurarEspacio(10);
+          doc.setFillColor(238, 242, 255); doc.setDrawColor(199, 210, 254); doc.setLineWidth(0.2);
+          doc.roundedRect(cx, y - 4.4, w, 7, 3.5, 3.5, 'FD');
+          doc.setTextColor(...MARCA);
+          doc.text(txt, cx + 4, y);
+          cx += w + 2.5;
+        });
+        y += 9;
+      };
+
+      const parrafo = (txt, { size = 9.5, color = GRIS, font = 'normal', gap = 3 } = {}) => {
+        const limpio = pdfSeguro(txt);
+        if (!limpio) return;
+        doc.setFont('helvetica', font); doc.setFontSize(size); doc.setTextColor(...color);
+        doc.splitTextToSize(limpio, DERECHA - MARGEN).forEach((linea) => {
+          asegurarEspacio(size * 0.55);
+          doc.text(linea, MARGEN, y);
+          y += size * 0.45;
+        });
+        y += gap;
+      };
+
+      /* ---------- Encabezado: barra de marca + foto + nombre ---------- */
+      doc.setFillColor(...MARCA);
+      doc.rect(0, 0, ANCHO, 4, 'F');
+
+      const foto = await fotoParaPDF();
+      let xTexto = MARGEN;
+      let altoCabecera = 22;
+
+      if (foto) {
+        const wF = 30;
+        const hF = Math.min(38, wF * foto.h / foto.w);
+        doc.setFillColor(241, 245, 249);
+        doc.roundedRect(MARGEN, y, wF, hF, 2, 2, 'F');
+        doc.addImage(foto.dataURL, 'JPEG', MARGEN, y, wF, hF);
+        xTexto = MARGEN + wF + 8;
+        altoCabecera = Math.max(hF, 22);
+      }
+
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(19); doc.setTextColor(...TINTA);
+      doc.text(pdfSeguro(s.nombre.trim()) || 'Sin nombre', xTexto, y + 7, { maxWidth: DERECHA - xTexto });
+
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...GRIS);
+      doc.text(
+        pdfSeguro([s.telefono.trim(), s.correo.trim(), s.localidad.trim()].filter(Boolean).join('   |   ')),
+        xTexto, y + 13.5, { maxWidth: DERECHA - xTexto }
+      );
+
+      y += altoCabecera + 8;
+
+      /* ---------- Objetivo y disponibilidad ---------- */
+      seccion('Objetivo laboral');
+      chips(armarAreas());
+
+      seccion('Disponibilidad');
+      chips(s.disponibilidad);
+      parrafo(
+        'Movilidad propia: ' + (s.movilidad ? 'Si' : 'No') +
+        '    |    Carnet de conducir: ' + (s.carnet ? 'Si' : 'No'),
+        { gap: 2 }
+      );
+
+      /* ---------- Experiencia laboral ---------- */
+      seccion('Experiencia laboral');
+
+      if (!s.experiencias.length) {
+        parrafo(s.sinExperiencia ? 'Busca su primer empleo. Sin experiencia previa.' : 'Sin experiencia laboral registrada.');
+      }
+
+      s.experiencias.forEach((e) => {
+        asegurarEspacio(24);
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(10.5); doc.setTextColor(...TINTA);
+        doc.text(pdfSeguro(e.puesto + ' - ' + e.empresa), MARGEN, y, { maxWidth: DERECHA - MARGEN });
+        y += 5;
+        doc.setFont('helvetica', 'italic'); doc.setFontSize(9); doc.setTextColor(...MARCA);
+        doc.text(pdfSeguro(e.periodo), MARGEN, y);
+        y += 6;
+        // Las tareas se parten en viñetas por coma o punto y coma
+        pdfSeguro(e.tareas).split(/[,;•\n]+/).map(t => t.trim()).filter(Boolean).forEach((t) => {
+          doc.setFont('helvetica', 'normal'); doc.setFontSize(9.5); doc.setTextColor(...GRIS);
+          doc.splitTextToSize(t, DERECHA - MARGEN - 6).forEach((linea, i) => {
+            asegurarEspacio(6);
+            if (i === 0) { doc.setTextColor(...MARCA); doc.text('•', MARGEN, y); }
+            doc.setTextColor(...GRIS);
+            doc.text(linea, MARGEN + 5, y);
+            y += 4.3;
+          });
+        });
+        y += 3;
+      });
+
+      /* ---------- Estudios ---------- */
+      seccion('Estudios');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10); doc.setTextColor(...TINTA);
+      doc.text(pdfSeguro(s.nivelEstudios || '—'), MARGEN, y);
+      y += 5;
+      if (s.titulo.trim()) parrafo(s.titulo.trim(), { gap: 2 });
+      if (s.cursos.trim()) {
+        doc.setFont('helvetica', 'bold'); doc.setFontSize(9); doc.setTextColor(...TINTA);
+        doc.text('Cursos realizados', MARGEN, y);
+        y += 4.5;
+        parrafo(s.cursos.trim(), { gap: 2 });
+      }
+
+      /* ---------- Habilidades ---------- */
+      seccion('Habilidades y herramientas');
+      const hab = [...s.habilidades];
+      if (s.otrasHerramientas.trim()) {
+        hab.push(...s.otrasHerramientas.split(',').map(t => t.trim()).filter(Boolean));
+      }
+      chips(hab);
+
+      /* ---------- Página 2: datos estructurados + prompt para IA ---------- */
+      nuevaPagina();
+      doc.setFillColor(...MARCA);
+      doc.rect(0, 0, ANCHO, 4, 'F');
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(15); doc.setTextColor(...TINTA);
+      doc.text('Datos estructurados', MARGEN, y);
+      y += 10;
+
+      const jsonTexto = JSON.stringify(armarJSON(), null, 2);
+      // Fuente monoespaciada: el JSON queda legible y se puede copiar tal cual
+      doc.setFont('courier', 'normal'); doc.setFontSize(7.5); doc.setTextColor(...GRIS);
+      doc.splitTextToSize(pdfSeguro(jsonTexto), DERECHA - MARGEN).forEach((linea) => {
+        asegurarEspacio(4);
+        doc.text(linea, MARGEN, y);
+        y += 3.1;
+      });
+
+      y += 6;
+      seccion('Prompt para crear el CV');
+      parrafo('Copiá todo este bloque y pegalo en una IA para generar el currículum:', { gap: 4 });
+      doc.setFont('helvetica', 'normal'); doc.setFontSize(9); doc.setTextColor(...TINTA);
+      const prompt = [
+        'Actúa como experto en Recursos Humanos y redactá un currículum',
+        'profesional de alto impacto en español rioplatense, tono cercano.',
+        'Máximo una página. Secciones: Datos de contacto, Perfil profesional,',
+        'Experiencia laboral, Estudios, Habilidades.',
+        'Convertí cada tarea en 3 a 5 viñetas con verbo en pasado, empezando',
+        'por verbo de acción. Destacá primero las habilidades que matchean con',
+        'el objetivo. NO inventes datos: si algo falta, escribí [A COMPLETAR].',
+      ].join(' ');
+      doc.splitTextToSize(pdfSeguro(prompt), DERECHA - MARGEN).forEach((linea) => {
+        asegurarEspacio(5);
+        doc.text(linea, MARGEN, y);
+        y += 4.3;
+      });
+
+      /* ---------- Pie en todas las páginas ---------- */
+      const total = doc.getNumberOfPages();
+      const sello = 'Ref. ' + referencia + '  -  Generado ' + new Date().toLocaleString('es-AR');
+      for (let i = 1; i <= total; i++) {
+        doc.setPage(i);
+        doc.setDrawColor(...LINEA); doc.setLineWidth(0.2);
+        doc.line(MARGEN, PIE - 5, DERECHA, PIE - 5);
+        doc.setFont('helvetica', 'normal'); doc.setFontSize(8); doc.setTextColor(148, 163, 184);
+        doc.text(pdfSeguro(sello), MARGEN, PIE);
+        doc.text(i + ' / ' + total, DERECHA, PIE, { align: 'right' });
+      }
+
+      // Nombre de archivo: sin acentos ni espacios
+      const slug = pdfSeguro(s.nombre.trim())
+        .normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+        .replace(/[^a-zA-Z0-9]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 50) || 'cliente';
+      const nombreArchivo = 'CV_' + slug + '_' + referencia + '.pdf';
+
+      // Usamos 'arraybuffer' (el único formato que existe en todas las
+      // versiones de jsPDF) y lo envolvemos en un Blob nativo.
+      const blob = new Blob([doc.output('arraybuffer')], { type: 'application/pdf' });
+      return { blob, nombreArchivo };
+    }
+
+    /**
+     * Sube el PDF a Cloudinary y devuelve la URL pública.
+     * Devuelve null si no está configurado (la app sigue igual).
+     */
+    async function subirPDF(blob, nombreArchivo) {
+      const cloud = (CONFIG.CLOUDINARY_CLOUD || '').trim();
+      const preset = (CONFIG.CLOUDINARY_PRESET || '').trim();
+      if (!cloud || !preset) return null;
+
+      const fd = new FormData();
+      fd.append('file', blob, nombreArchivo);
+      fd.append('upload_preset', preset);
+
+      // Sin Content-Type manual: el browser pone el boundary del FormData
+      const res = await fetch('https://api.cloudinary.com/v1_1/' + cloud + '/image/upload', {
+        method: 'POST', body: fd,
+      });
+      const data = await res.json();
+      if (!data.secure_url) throw new Error(data.error && data.error.message || 'Cloudinary no devolvió una URL');
+      return data.secure_url;
+    }
+
+    /**
+     * Flujo completo: arma el PDF → lo sube (si hay hosting configurado) →
+     * muestra la pantalla de éxito con el botón de WhatsApp.
+     * No hay ningún servidor de email acá: el PDF viaja por WhatsApp.
+     */
     async function enviarTodo() {
+      if (enviando) return;
       setEnviando(true);
       $('errBox').classList.add('hidden');
 
-      // Intento 1: foto full (600px) · Intento 2: foto reducida (320px)
-      const intentosFoto = [];
-      if (state.foto) {
-        intentosFoto.push(state.foto.base64);
-        try { intentosFoto.push(await generarFoto(320, 0.65)); } catch (e) {}
-      } else {
-        intentosFoto.push(null);
+      let pdf = null;      // { blob, nombreArchivo }
+      let urlPDF = null;   // enlace público, si se pudo subir
+
+      try {
+        // ── 1) PDF en el navegador ─────────────────────────────
+        setEnviando(true, 'Generando PDF…');
+        pdf = await generarPDF();
+      } catch (e) {
+        console.error('Falló la generación del PDF:', e);
+        setEnviando(false);
+        mostrarErrorEnvio({ mensaje: 'No pudimos generar el PDF. Probá de nuevo.' });
+        return;
       }
 
-      let error = null;
-      for (const foto of intentosFoto) {
+      // ── 2) Subirlo para poder mandar el enlace ──────────────
+      if ((CONFIG.CLOUDINARY_CLOUD || '').trim()) {
         try {
-          await enviarEmail(foto);
-          mostrarExito();
-          setEnviando(false);
-          return;
+          setEnviando(true, 'Subiendo PDF…');
+          urlPDF = await subirPDF(pdf.blob, pdf.nombreArchivo);
         } catch (e) {
-          error = e;
-          if (e.tipo === 'config' || e.tipo === 'activacion') break; // reintentar no lo soluciona
+          console.error('Falló la subida del PDF:', e);
+          urlPDF = null;
+          toast('No pudimos subir el PDF, igual te dejo descargarlo', 'info');
         }
       }
 
       setEnviando(false);
-      mostrarErrorEnvio(error);
+      mostrarExito(pdf, urlPDF);
     }
 
-    function setEnviando(on) {
+    function setEnviando(on, etiqueta = 'Enviando…') {
       enviando = on;
       $('btnNext').disabled = on;
       $('btnPrev').disabled = on || currentStep === 1;
       $('btnNext').innerHTML = on
-        ? `<svg class="spinner w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" stroke-linecap="round"/></svg><span>Enviando…</span>`
+        ? `<svg class="spinner w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" stroke-linecap="round"/></svg><span>${etiqueta}</span>`
         : (currentStep === 4
           ? `<svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="22" y1="2" x2="11" y2="13"/><polygon points="22 2 15 22 11 13 2 9 22 2"/></svg><span>Enviar mis datos</span>`
           : `<span>Siguiente</span><svg class="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="5" y1="12" x2="19" y2="12"/><polyline points="12 5 19 12 12 19"/></svg>`);
     }
 
     function mostrarErrorEnvio(e) {
-      const tipo = e?.tipo || 'desconocido';
       const detalle = e?.mensaje || 'Error de conexión. Revisá tu internet e intentá de nuevo.';
       $('errMsg').textContent = '⚠️ ' + detalle;
-      $('waFallback').href = linkWhatsApp();
+      // Plan B: el cliente puede mandar los datos en texto igual
+      $('waFallback').href = linkWhatsApp(null);
       $('errBox').classList.remove('hidden');
       $('errBox').scrollIntoView({ behavior: 'smooth', block: 'center' });
-      if (tipo !== 'config' && tipo !== 'activacion') toast('No pudimos enviar el mail 😕', 'err');
+      toast('No pudimos generar el PDF 😕', 'err');
     }
 
     /* ══════════════════════════════════════════════════════════════════
        12) PANTALLA DE ÉXITO + WhatsApp + Reset
        ══════════════════════════════════════════════════════════════════ */
-    function mostrarExito() {
+    function mostrarExito(pdf, urlPDF) {
       const primerNombre = (state.nombre.trim().split(/\s+/)[0]) || '';
       $('successTitle').textContent = primerNombre ? `¡Listo, ${primerNombre}! 🎉` : '¡Listo! 🎉';
-      $('successMail').textContent = CONFIG.ADMIN_EMAIL;
-      $('btnWa').href = linkWhatsApp();
+      $('successMail').textContent = '+' + CONFIG.ADMIN_WHATSAPP;
+
+      // El mensaje lleva el enlace al PDF (o todos los datos en texto)
+      $('btnWa').href = linkWhatsApp(urlPDF);
+
+      // Estado del PDF, en palabras simples
+      const kb = pdf ? Math.round(pdf.blob.size / 1024) : 0;
+      if (urlPDF) {
+        $('pdfStatusText').textContent = `✅ PDF listo (${kb} KB) y subido`;
+        $('pdfStatusHint').textContent = 'El enlace va en el mensaje de WhatsApp.';
+      } else {
+        $('pdfStatusText').textContent = `✅ PDF listo (${kb} KB)`;
+        $('pdfStatusHint').textContent =
+          'Va a descargarse en tu celular: compartilo por WhatsApp junto con los datos.';
+      }
+
+      // Respaldo: el cliente puede guardar el PDF y mandarlo a mano
+      if (pdf) {
+        const url = URL.createObjectURL(pdf.blob);
+        $('btnDescargarPDF').href = url;
+        $('btnDescargarPDF').setAttribute('download', pdf.nombreArchivo);
+        $('btnDescargarPDF').classList.remove('hidden');
+      }
+
       $('bottomNav').classList.add('hidden');
       mostrarSeccion('stepSuccess');
-      $('stepLabel').textContent = '✅ Datos enviados';
+      $('stepLabel').textContent = '✅ PDF generado';
       $('progressFill').style.width = '100%';
       $('stepPct').textContent = '100%';
       if (navigator.vibrate) navigator.vibrate([30, 60, 30]);
-      toast('¡Datos enviados con éxito! 🎉', 'ok');
+      toast('¡PDF generado! Tocá el botón verde 📲', 'ok');
     }
 
     /** Reinicia la app para cargar otra persona (conserva el tema). */
@@ -1205,6 +1452,9 @@
       // Experiencias y error
       renderExpList();
       $('errBox').classList.add('hidden');
+      // Estado del PDF de la carga anterior
+      $('btnDescargarPDF').classList.add('hidden');
+      $('btnDescargarPDF').removeAttribute('href');
       // Volver al inicio
       $('bottomNav').classList.remove('hidden');
       goTo(1);
@@ -1238,7 +1488,7 @@
        ══════════════════════════════════════════════════════════════════ */
     renderExpList();
     actualizarNav();
-    console.log('%c📄 CV Express listo. Recordá configurar CONFIG.ADMIN_EMAIL y CONFIG.ADMIN_WHATSAPP.',
+    console.log('%c📄 CV Express listo. Configurá CONFIG.ADMIN_WHATSAPP y, si querés que el PDF se suba solo, CONFIG.CLOUDINARY_CLOUD.',
                 'color:#6366f1;font-weight:bold;');
   </script>
 </body>
